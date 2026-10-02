@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Vedic Chart",
+    "slug": "vedic-chart",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "scheme": "vedicchart",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "resizeMode": "contain",
+      "backgroundColor": "#1f5c3d"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "org.example.vedicchart"
+    },
+    "android": {
+      "package": "org.example.vedicchart",
+      "adaptiveIcon": {
+        "backgroundColor": "#1f5c3d"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "output": "static"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-asset",
+      "expo-font"
+    ],
+    "experiments": {
+      "typedRoutes": false
+    }
+  }
+}

@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Node
+node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/.env
+npm-debug.log*
+
+# Data — regenerate with scripts/build_aa_dataset.py and build_event_dataset.py.
+# The AA birth corpus and the derived event file are reproducible from public
+# sources, so they are not committed; that keeps a 3.6MB generated blob out of
+# history and forces the acquisition step to be explicit.
+data/*.csv
+data/app.db
+data/*.db
+
+# Ephemeris data files are licensed separately by Astrodienst and must not be
+# redistributed here. See docs/TECHNICAL_PLAN.md section 6.1.
+*.se1
+*.se1.gz
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

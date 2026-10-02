@@ -1,0 +1,13 @@
+# Core dependencies
+#
+# Note on timezones: the engine uses the Python standard library `zoneinfo`
+# with the `tzdata` package. It does NOT use pytz, because pytz's localize()
+# returns Local Mean Time for pre-standard-time dates and disagrees with the
+# IANA database by up to ~32 minutes (e.g. Asia/Kolkata before 1906,
+# America/New_York before 1918). That is enough to move the ascendant several
+# degrees and change the whole-sign house assignment.
+#
+# `tzdata` is required explicitly on Windows, which ships no system tz database.
+
+pyswisseph==2.10.3
+tzdata>=2024.1
