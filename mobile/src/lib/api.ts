@@ -293,6 +293,18 @@ export async function getConfig(): Promise<any> {
   return request('/config');
 }
 
+export async function getDashboard(): Promise<any> {
+  return request('/dashboard');
+}
+
+export async function exportAll(): Promise<any> {
+  return request('/export');
+}
+
+export async function importAll(payload: any): Promise<any> {
+  return request('/import', { method: 'POST', body: JSON.stringify(payload) });
+}
+
 export async function getTimeline(profileId: string): Promise<any> {
   return request(`/profiles/${profileId}/timeline`);
 }

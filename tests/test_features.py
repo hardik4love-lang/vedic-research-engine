@@ -240,12 +240,32 @@ def test_negative_features_are_extracted(chart):
 
 
 def test_feature_extraction_is_deterministic(chart):
+    """Factors must be bit-identical; longitudes need only agree closely.
+
+    swisseph is not bit-reproducible: the Moon's longitude varies by about
+    1e-8 degrees between calls, which is 1e-4 arcseconds of floating-point
+    noise in the C library. That is far below any boundary the factor set
+    depends on, but it means asserting exact longitude equality would be
+    asserting something the underlying library does not guarantee.
+
+    The factor SET is the property everything downstream depends on, and
+    that must be exactly reproducible.
+    """
     a = extract_features_at(chart, date(2010, 3, 15))
     b = extract_features_at(chart, date(2010, 3, 15))
+
     assert a.factors == b.factors
     assert a.dasha_lord == b.dasha_lord
+    assert a.antardasha_lord == b.antardasha_lord
+    assert (a.pratyantardasha_lord, a.when) == (b.pratyantardasha_lord, b.when)
+
     for planet in a.transits:
-        assert a.transits[planet].longitude_sidereal == b.transits[planet].longitude_sidereal
+        assert a.transits[planet].house == b.transits[planet].house
+        assert a.transits[planet].sign == b.transits[planet].sign
+        assert a.transits[planet].nakshatra == b.transits[planet].nakshatra
+        assert a.transits[planet].longitude_sidereal == pytest.approx(
+            b.transits[planet].longitude_sidereal, abs=1e-6
+        )
 
 
 def test_feature_vector_serialises(chart):

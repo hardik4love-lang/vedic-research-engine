@@ -31,6 +31,7 @@ export default function RootLayout() {
         <Stack.Screen name="create-profile" options={{ title: 'New profile' }} />
         <Stack.Screen name="chart" options={{ title: 'Chart' }} />
         <Stack.Screen name="add-event" options={{ title: 'Events' }} />
+        <Stack.Screen name="dashboard" options={{ title: 'Accuracy' }} />
         <Stack.Screen name="predictions" options={{ title: 'Predictions' }} />
       </Stack>
     </QueryClientProvider>

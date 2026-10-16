@@ -33,6 +33,11 @@ export default function Index() {
         onPress={() => router.push({ pathname: '/add-event', params: {} })}
       />
       <MenuCard
+        title="Accuracy"
+        body="Measured performance, including null results."
+        onPress={() => router.push({ pathname: '/dashboard', params: {} })}
+      />
+      <MenuCard
         title="Predictions"
         body="What the model can and cannot currently tell you."
         onPress={() => router.push({ pathname: '/predictions', params: {} })}

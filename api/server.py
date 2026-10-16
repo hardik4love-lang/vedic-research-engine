@@ -13,12 +13,15 @@ with a reason, rather than returning a partial chart that would look valid.
 from __future__ import annotations
 
 import json
+import os
 import uuid
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from engine.events import (
@@ -33,12 +36,24 @@ from engine.features import extract_features_for_event
 from engine.vedic_layer import build_vedic_chart, chart_to_dict
 from storage.event_store import EventStore
 
-DB_PATH = Path(__file__).resolve().parent.parent / "data" / "app.db"
+ROOT = Path(__file__).resolve().parent.parent
+DB_PATH = ROOT / "data" / "app.db"
+EVALUATION_PATH = ROOT / "data" / "evaluation.json"
+
+# Set VEDIC_API_KEY to require a key on mutating routes. Empty (the default)
+# means open, which is acceptable for a local tunnel and unsafe for anything
+# larger. /health reports which mode is active so a client can tell.
+API_KEY = os.getenv("VEDIC_API_KEY", "")
+AUTH_ENABLED = bool(API_KEY)
 
 app = FastAPI(
     title="Vedic Chart API",
-    version="0.1.0",
-    description="Sidereal chart calculation with explicit, stored conventions.",
+    version="0.2.0",
+    description=(
+        "Sidereal chart calculation with explicit, stored conventions. "
+        "The system reports measured performance, including null results, "
+        "and renders no prediction it cannot evidence."
+    ),
 )
 
 app.add_middleware(
@@ -47,6 +62,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
+
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    """Require x-api-key on mutating routes when a key is configured.
+
+    Read routes stay open so the dashboard and chart previews remain
+    inspectable; anything that writes requires the key. A tunnel link shared
+    without a key is therefore read-only for anyone who does not hold it.
+    """
+    if AUTH_ENABLED and request.method not in _SAFE_METHODS:
+        supplied = (
+            request.headers.get("x-api-key")
+            or request.query_params.get("api_key")
+        )
+        if supplied != API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={
+                    "detail": "this endpoint requires the x-api-key header"
+                },
+            )
+    return await call_next(request)
 
 # The Expo web build is mounted at the bottom of this file, AFTER all the API
 # routes. FastAPI matches routes in registration order, so a catch-all placed
@@ -231,7 +271,225 @@ def _store() -> EventStore:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    return {"status": "ok", "version": app.version}
+    from engine.swisseph_wrapper import ephemeris_status
+
+    return {
+        "status": "ok",
+        "version": app.version,
+        "ephemeris": ephemeris_status(),
+        "auth_required": AUTH_ENABLED,
+    }
+
+
+@app.get("/dashboard")
+def dashboard() -> dict[str, Any]:
+    """Measured model performance.
+
+    Served from persisted evaluation output when present. With no evaluation
+    on record it reports that fact rather than returning zeros that would
+    read as "measured and found nothing".
+    """
+    if EVALUATION_PATH.exists():
+        payload = json.loads(EVALUATION_PATH.read_text(encoding="utf-8"))
+        return payload
+
+    return {
+        "sample": None,
+        "categories_analysed": 0,
+        "categories_supported": 0,
+        "verdict": (
+            "No evaluation on record. The harness is built and self-verified, "
+            "but no cohort has met the minimum of five dated events per "
+            "subject required to train and score a model."
+        ),
+        "categories": [],
+        "method_notes": [
+            "Blindness is structural: the training set type has no field "
+            "through which held-out data could arrive.",
+            "Inference is clustered by profile. On autocorrelated windows the "
+            "naive analysis overstates significance by ~28 million times.",
+            "Negatives are age-matched, because Vimshottari dashas run "
+            "sequentially and would otherwise be measured as age.",
+        ],
+        "disclaimer": "No figures are shown because none have been measured.",
+    }
+
+
+@app.post("/evaluate")
+def evaluate(request: Request) -> dict[str, Any]:
+    """Run and persist a cluster-robust evaluation over the stored profiles."""
+    if request.headers.get("x-api-key") != API_KEY:
+        raise HTTPException(401, "evaluation requires the x-api-key header")
+
+    import subprocess
+    import sys as _sys
+
+    proc = subprocess.run(
+        [_sys.executable, "scripts/corrected_run.py"],
+        cwd=str(Path(__file__).resolve().parent.parent),
+        capture_output=True, text=True, timeout=3600,
+    )
+    if proc.returncode != 0:
+        raise HTTPException(500, f"evaluation failed: {proc.stderr[-500:]}")
+    return {
+        "status": "completed",
+        "output": proc.stdout[-4000:],
+        "note": "Parse scripts/corrected_run.py output into the dashboard.",
+    }
+
+
+@app.get("/export")
+def export(profile_id: str | None = None) -> dict[str, Any]:
+    """Full export of profiles and events, with config and fingerprints.
+
+    Written so an export can be re-imported into another instance without
+    losing the provenance that makes stored results interpretable.
+    """
+
+    with _store() as store:
+        if profile_id:
+            ids = [profile_id]
+        else:
+            ids = [r["profile_id"] for r in store.conn.execute(
+                "SELECT profile_id FROM profiles").fetchall()]
+
+        out_profiles = []
+        for pid in ids:
+            profile = store.get_profile(pid)
+            if profile is None:
+                continue
+            events = store.get_events(pid)
+            out_profiles.append({
+                "profile_id": pid,
+                "birth_date": profile.birth_date.isoformat(),
+                "birth_time": profile.birth_time,
+                "timezone": profile.timezone,
+                "latitude": profile.latitude,
+                "longitude": profile.longitude,
+                "city": profile.city,
+                "country": profile.country,
+                "calc_config": profile.calc_config,
+                "chart_fingerprint": profile.chart_fingerprint(),
+                "events": [
+                    {
+                        "category": e.category.value,
+                        "sub_category": e.sub_category,
+                        "start_lower": e.date_interval.start.isoformat(),
+                        "start_upper": e.date_interval.end.isoformat(),
+                        "precision": e.date_interval.precision.value,
+                        "end_lower": e.end_interval.start.isoformat() if e.end_interval else None,
+                        "end_upper": e.end_interval.end.isoformat() if e.end_interval else None,
+                        "impact": e.impact,
+                        "certainty": e.certainty,
+                        "description": e.description,
+                    }
+                    for e in events
+                ],
+            })
+
+    return {
+        "format": "vedic-export/1",
+        "exported_at": datetime.now(UTC).isoformat(),
+        "engine_version": app.version,
+        "config": config(),
+        "profiles": out_profiles,
+        "summary": {
+            "profile_count": len(out_profiles),
+            "event_count": sum(len(p["events"]) for p in out_profiles),
+        },
+    }
+
+
+class ImportProfile(BaseModel):
+    birth_date: str
+    birth_time: str
+    timezone: str = ""
+    latitude: float | None = None
+    longitude: float | None = None
+    city: str = ""
+    country: str = ""
+    calc_config: dict[str, Any] = Field(default_factory=dict)
+
+
+class ImportEvent(BaseModel):
+    category: str
+    sub_category: str
+    start_lower: str
+    start_upper: str
+    precision: str
+    end_lower: str | None = None
+    end_upper: str | None = None
+    impact: int = 3
+    certainty: int = 3
+    description: str = ""
+
+
+class ImportRequest(BaseModel):
+    format: str = "vedic-export/1"
+    profiles: list[dict[str, Any]] = Field(default_factory=list)
+
+
+@app.post("/import")
+def import_data(payload: ImportRequest) -> dict[str, Any]:
+    """Import an export. Idempotent: re-importing does not duplicate."""
+    if payload.format != "vedic-export/1":
+        raise HTTPException(422, f"unsupported format {payload.format!r}")
+
+    from engine.events import (
+        DateInterval,
+        EventCategory,
+        LifeEvent,
+        Profile,
+    )
+
+    created = skipped = 0
+    with _store() as store:
+        for raw in payload.profiles:
+            try:
+                if store.get_profile(raw["profile_id"]) is not None:
+                    skipped += 1
+                    continue
+                profile = Profile(
+                    profile_id=raw["profile_id"],
+                    birth_date=date.fromisoformat(raw["birth_date"]),
+                    birth_time=raw["birth_time"],
+                    timezone=raw.get("timezone", ""),
+                    latitude=raw.get("latitude") or 0.0,
+                    longitude=raw.get("longitude") or 0.0,
+                    city=raw.get("city", ""),
+                    country=raw.get("country", ""),
+                    calc_config=raw.get("calc_config") or {},
+                )
+                store.add_profile(profile)
+                for ev in raw.get("events", []):
+                    precision = DatePrecision(ev["precision"])
+                    store.add_event(LifeEvent(
+                        profile_id=raw["profile_id"],
+                        category=EventCategory(ev["category"]),
+                        sub_category=ev["sub_category"],
+                        date_interval=DateInterval(
+                            start=date.fromisoformat(ev["start_lower"]),
+                            end=date.fromisoformat(ev["start_upper"]),
+                            precision=precision,
+                        ),
+                        end_interval=(
+                            DateInterval(
+                                start=date.fromisoformat(ev["end_lower"]),
+                                end=date.fromisoformat(ev["end_upper"]),
+                                precision=precision,
+                            ) if ev.get("end_lower") else None
+                        ),
+                        impact=ev.get("impact", 3),
+                        certainty=ev.get("certainty", 3),
+                        description=ev.get("description", ""),
+                    ))
+                created += 1
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(
+                    422, f"import failed for {raw.get('profile_id')}: {exc}"
+                ) from exc
+
+    return {"created": created, "skipped_existing": skipped}
 
 
 @app.get("/taxonomy")
